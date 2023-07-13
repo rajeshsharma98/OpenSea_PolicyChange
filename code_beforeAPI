@@ -1,0 +1,146 @@
+# import collections
+from dataclasses import dataclass
+from multiprocessing import parent_process
+from tokenize import PlainToken
+from tqdm import trange
+from selenium import webdriver
+from webdriver_manager.chrome import ChromeDriverManager
+from os.path import isfile, join
+from os import listdir
+
+import requests
+import json
+import time
+import pandas as pd
+import matplotlib
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+api_key = "de6c22202ea24a70b00d7e702ad23f13"
+
+'''Before API'''
+#-------------------------------------------------------- KAGGLE DATASET: extract more info
+def kaggle_dataset():
+  # Create a new DataFrame to store values
+  df = pd.read_csv('data/opensea_collections.csv')
+  slug = df.slug.tolist()
+  nt = []
+
+  # Empty data frame with common columns
+  df1 = pd.DataFrame(columns=['editors', 'payment_tokens', 'primary_asset_contracts',
+        'banner_image_url', 'chat_url', 'created_date', 'default_to_fiat',
+        'description', 'dev_buyer_fee_basis_points',
+        'dev_seller_fee_basis_points', 'discord_url', 'external_url',
+        'featured', 'featured_image_url', 'hidden', 'safelist_request_status',
+        'image_url', 'is_subject_to_whitelist', 'large_image_url',
+        'medium_username', 'name', 'only_proxied_transfers',
+        'opensea_buyer_fee_basis_points', 'opensea_seller_fee_basis_points',
+        'payout_address', 'require_email', 'short_description', 'slug',
+        'telegram_url', 'twitter_username', 'instagram_username', 'wiki_url',
+        'is_nsfw', 'stats.one_day_volume', 'stats.one_day_change',
+        'stats.one_day_sales', 'stats.one_day_average_price',
+        'stats.seven_day_volume', 'stats.seven_day_change',
+        'stats.seven_day_sales', 'stats.seven_day_average_price',
+        'stats.thirty_day_volume', 'stats.thirty_day_change',
+        'stats.thirty_day_sales', 'stats.thirty_day_average_price',
+        'stats.total_volume', 'stats.total_sales', 'stats.total_supply',
+        'stats.count', 'stats.num_owners', 'stats.average_price',
+        'stats.num_reports', 'stats.market_cap', 'stats.floor_price',
+        'display_data.card_display_style','display_data.images']) 
+
+  # without API rate limit - https://docs.opensea.io/reference/api-overview
+  # request per second
+  z = 0
+  for i in trange(len(slug)):
+    url = "https://api.opensea.io/api/v1/collection/"+slug[i]
+    # print(slug[i])
+    response = requests.get(url)
+
+    # =========================
+    ''' Error 429 is after fetching 40 requests at a one stretch'''
+    if i%4 == 0:
+      time.sleep(2)
+    
+    # Save fetched data and not found slug values to files
+    # after processing 801 files 
+    elif i%801 == 0:
+      time.sleep(50)
+      df1.to_csv(str(i)+'_fetched.csv')
+      with open(str(i)+'data/not_found.txt', 'w') as fp:
+        fp.write('\n'.join(nt))
+
+    # =========================
+
+    # Check if response status not 200 store the slug value else procees
+    if response.status_code != 200:
+      z += 1
+      print('Error status_code: ',response.status_code,' Count: ',z)
+      nt.append(slug[i])
+
+    else:
+      json_data = json.loads(response.text)
+      df2 = pd.json_normalize(json_data['collection'])
+    
+      extra_clmns = (list(set(list(df2.columns)) - set(list(df1.columns))))
+      # Extra clmns especially traits key of json_file is removed
+
+      df2.drop(extra_clmns, axis=1, inplace=True)
+    
+      df1 = df1.append(df2)
+    # =========================
+
+  # Store values to a new dataframe
+  df1.to_csv('data/kaggle_fetched.csv')
+
+  # Store all the slug names that got 404 error
+  with open('not_found.txt', 'w') as fp:
+        fp.write('\n'.join(nt))
+
+  ''' Extra columns example'''
+  eurl = "https://api.opensea.io/api/v1/collection/doodles-official"
+  response = requests.get(eurl)
+  print(response.text)
+
+#-------------------------------------------------------- SELENIUM
+
+# https://www.geeksforgeeks.org/how-to-install-selenium-webdriver-on-macos/
+def selenium():
+  # create new dataframe to store values
+  df3 = pd.DataFrame(columns= ['slug','items','owners_count','owner_name']) # owner_name
+
+  df1 = pd.read_csv('kaggle_fetched.csv')
+
+  for i in trange(df1.shape[0]):
+
+    if i%50 == 0:
+        time.sleep(5)
+    elif i%801 ==0:
+        df3.to_csv('selenium'+i+'.csv')
+    else:
+      url = 'https://opensea.io/collection/'+df1.slug[i]
+      # url = 'https://opensea.io/collection/projectcrack'
+
+      # set up driver manager
+      driver_path = ChromeDriverManager().install()
+      options = webdriver.ChromeOptions()
+      # options.add_argument("--start-maximized")
+      driver = webdriver.Chrome(driver_path, chrome_options=options)
+      driver.get(url)
+
+      assests = driver.find_element('xpath','//*[@id="main"]/div/div/div[5]/div/div[1]/div/div[3]/div/div[2]/button/div/span[1]/div').text
+      owner_count = driver.find_element('xpath','//*[@id="main"]/div/div/div[5]/div/div[1]/div/div[3]/div/div[4]/a/div/span[1]/div').text
+      if int(owner_count)<2: # Remove this
+        owner_name = 'Null'
+      else:
+        owner_name = driver.find_element('xpath','//*[@id="main"]/div/div/div[4]/div/div/div/div[1]/div/div/a/div').text
+     
+      # owner_name
+      # try and except use it
+      # as most of them do not have creator name
+      
+      df3.loc[i,['slug']] = df1.slug[i]
+      df3.loc[i,['items']] = assests
+      df3.loc[i,['owners_count']] = owner_count
+      df3.loc[i,['owner_name']] = owner_name
+      df3.to_csv('selenium.csv')
